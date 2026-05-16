@@ -14,7 +14,7 @@ E:\my_work\
 
 - 平台: Windows 11
 - Shell: Git Bash
-- Python: E:\QMT\code\venv\Scripts\python.exe
+- Python: E:\my_work\venv\Scripts\python.exe
 - Node.js: 20.x
 
 ---
