@@ -28,8 +28,11 @@ FILTERS = {
     "不纳入统计": ["否"],
 }
 
-# 输出指标列（分组维度），可多个
-OUTPUT_DIMS = ["数据集", "一级分类"]
+# 主分组维度: None 表示不分组
+MAIN_DIM = "数据集"
+
+# 子分组维度: None 表示无子分组
+SUB_DIM = "一级分类"
 
 # 统计指标列
 STAT_COL = "process_conclusion"
@@ -39,7 +42,26 @@ STAT_COL = "process_conclusion"
 # ============================================================
 
 
-def compute_stats(df, stat_col, output_dims):
+def _build_rows(df, group_col, stat_col, group_total_map):
+    """构建分组统计行"""
+    rows = []
+    for gval in sorted(df[group_col].dropna().unique()):
+        grp_total = group_total_map.get(gval, 0)
+        for sv in sorted(df[stat_col].dropna().unique()):
+            cnt = ((df[group_col] == gval) & (df[stat_col] == sv)).sum()
+            pct = cnt / grp_total if grp_total else 0
+            rows.append({
+                "分组": str(gval),
+                stat_col: str(sv),
+                "占比": round(pct * 100, 1),
+                "占比_raw": pct,
+                "正确/总数": f"{cnt}/{grp_total}",
+                "_total": grp_total,
+            })
+    return rows
+
+
+def compute_stats(df, stat_col, main_dim, sub_dim):
     """返回 [(title, DataFrame), ...] 列表"""
     total = len(df)
     stats = []
@@ -59,30 +81,33 @@ def compute_stats(df, stat_col, output_dims):
         })
     stats.append(("整体统计", pd.DataFrame(overall_rows)))
 
-    # 按各输出指标分组
-    for dim in output_dims:
-        if dim not in df.columns:
-            continue
+    # 按主分组
+    if main_dim and main_dim in df.columns:
+        m_totals = df.groupby(main_dim).size().to_dict()
+        stats.append((
+            f"按 [{main_dim}] 统计指标",
+            pd.DataFrame(_build_rows(df, main_dim, stat_col, m_totals)),
+        ))
 
-        pivoted = df.groupby([dim, stat_col]).size().reset_index(name="数量")
-        dim_totals = df.groupby(dim).size().to_dict()
+    # 按子分组
+    if sub_dim and sub_dim in df.columns:
+        s_totals = df.groupby(sub_dim).size().to_dict()
+        stats.append((
+            f"按 [{sub_dim}] 统计指标",
+            pd.DataFrame(_build_rows(df, sub_dim, stat_col, s_totals)),
+        ))
 
-        dim_rows = []
-        for dim_val in sorted(df[dim].dropna().unique()):
-            grp_total = dim_totals.get(dim_val, 0)
-            for sv in sorted(df[stat_col].dropna().unique()):
-                cnt = pivoted[(pivoted[dim] == dim_val) & (pivoted[stat_col] == sv)]["数量"].sum()
-                pct = cnt / grp_total if grp_total else 0
-                dim_rows.append({
-                    "分组": str(dim_val),
-                    stat_col: str(sv),
-                    "占比": round(pct * 100, 1),
-                    "占比_raw": pct,
-                    "正确/总数": f"{cnt}/{grp_total}",
-                    "_total": grp_total,
-                })
-
-        stats.append((f"按 [{dim}] 统计指标", pd.DataFrame(dim_rows)))
+    # 主分组 × 子分组 交叉统计
+    if main_dim and sub_dim and main_dim in df.columns and sub_dim in df.columns:
+        for m_val in sorted(df[main_dim].dropna().unique()):
+            subset = df[df[main_dim] == m_val]
+            s_totals = subset.groupby(sub_dim).size().to_dict()
+            if not s_totals:
+                continue
+            stats.append((
+                f"按 [{main_dim}={m_val}] → [{sub_dim}] 统计指标",
+                pd.DataFrame(_build_rows(subset, sub_dim, stat_col, s_totals)),
+            ))
 
     return stats
 
@@ -170,7 +195,7 @@ def main():
         return
 
     # 统计
-    stats = compute_stats(df, STAT_COL, OUTPUT_DIMS)
+    stats = compute_stats(df, STAT_COL, MAIN_DIM, SUB_DIM)
 
     # 打印
     for title, sdf in stats:

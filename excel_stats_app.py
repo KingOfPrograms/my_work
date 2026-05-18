@@ -140,15 +140,28 @@ for f in st.session_state.filters:
 
 st.caption(f"筛选后: {len(filtered_df)} 条（原始 {len(combined)} 条）")
 
-# --- Step 2: 输出指标列 ---
-st.markdown("### Step 2: 输出指标列（可多选）")
-st.caption("按这些列的值分组，生成各自的统计表（如按 [数据集] 和一 [一级分类] 分别统计）")
+# --- Step 2: 分组维度 ---
+st.markdown("### Step 2: 分组维度")
+st.caption("主分组为必选，子分组可选（需先选主分组），生成多维度统计表")
 
-output_dims = st.multiselect(
-    "选择输出指标列（可多选，空则仅输出整体）",
-    options=available_cols,
-    key="output_dims",
-)
+col_a, col_b = st.columns(2)
+with col_a:
+    main_dim = st.selectbox(
+        "主分组维度",
+        options=["(不分组)"] + available_cols,
+        key="main_dim",
+    )
+    main_dim = None if main_dim == "(不分组)" else main_dim
+
+with col_b:
+    sub_dim_options = ["(无子分组)"] + [c for c in available_cols if c != main_dim]
+    sub_dim = st.selectbox(
+        "子分组维度（可选）",
+        options=sub_dim_options,
+        key="sub_dim",
+        disabled=main_dim is None,
+    )
+    sub_dim = None if sub_dim == "(无子分组)" else sub_dim
 
 # --- Step 3: 统计指标列 ---
 st.markdown("### Step 3: 统计指标列")
@@ -175,6 +188,24 @@ if st.button("执行统计并生成 Excel", type="primary"):
     total = len(filtered_df)
     stats_tables = []  # (title, DataFrame) pairs
 
+    def _build_rows(df, group_col, group_total_map):
+        """构建分组统计行"""
+        rows = []
+        for gval in sorted(df[group_col].dropna().unique()):
+            grp_total = group_total_map.get(gval, 0)
+            for sv in sorted(df[stat_col].dropna().unique()):
+                cnt = ((df[group_col] == gval) & (df[stat_col] == sv)).sum()
+                pct = cnt / grp_total if grp_total else 0
+                rows.append({
+                    "分组": str(gval),
+                    stat_col: str(sv),
+                    "占比": round(pct * 100, 1),
+                    "占比_raw": pct,
+                    "正确/总数": f"{cnt}/{grp_total}",
+                    "_total": grp_total,
+                })
+        return rows
+
     # === Part 1: 整体统计 ===
     overall_rows = []
     for sv in sorted(filtered_df[stat_col].dropna().unique()):
@@ -183,44 +214,40 @@ if st.button("执行统计并生成 Excel", type="primary"):
         overall_rows.append({
             "分组": "整体",
             stat_col: str(sv),
-            "占比": round(pct * 100, 1),   # 数值（页面用）
-            "占比_raw": pct,                # 小数（Excel 百分比格式用）
+            "占比": round(pct * 100, 1),
+            "占比_raw": pct,
             "正确/总数": f"{cnt}/{total}",
             "_total": total,
         })
-    overall_df = pd.DataFrame(overall_rows)
-    stats_tables.append(("整体统计", overall_df))
+    stats_tables.append(("整体统计", pd.DataFrame(overall_rows)))
 
-    # === Part 2: 按每个输出指标分组统计 ===
-    for dim in output_dims:
-        if dim not in filtered_df.columns:
-            continue
+    # === Part 2: 按主分组维度 ===
+    if main_dim and main_dim in filtered_df.columns:
+        m_totals = filtered_df.groupby(main_dim).size().to_dict()
+        stats_tables.append((
+            f"按 [{main_dim}] 统计指标",
+            pd.DataFrame(_build_rows(filtered_df, main_dim, m_totals)),
+        ))
 
-        pivoted = (
-            filtered_df.groupby([dim, stat_col])
-            .size()
-            .reset_index(name="数量")
-        )
+    # === Part 3: 按子分组维度 ===
+    if sub_dim and sub_dim in filtered_df.columns:
+        s_totals = filtered_df.groupby(sub_dim).size().to_dict()
+        stats_tables.append((
+            f"按 [{sub_dim}] 统计指标",
+            pd.DataFrame(_build_rows(filtered_df, sub_dim, s_totals)),
+        ))
 
-        dim_totals = filtered_df.groupby(dim).size().to_dict()
-
-        dim_rows = []
-        for dim_val in sorted(filtered_df[dim].dropna().unique()):
-            grp_total = dim_totals.get(dim_val, 0)
-            for sv in sorted(filtered_df[stat_col].dropna().unique()):
-                cnt = pivoted[(pivoted[dim] == dim_val) & (pivoted[stat_col] == sv)]["数量"].sum()
-                pct = cnt / grp_total if grp_total else 0
-                dim_rows.append({
-                    "分组": str(dim_val),
-                    stat_col: str(sv),
-                    "占比": round(pct * 100, 1),
-                    "占比_raw": pct,
-                    "正确/总数": f"{cnt}/{grp_total}",
-                    "_total": grp_total,
-                })
-
-        dim_df = pd.DataFrame(dim_rows)
-        stats_tables.append((f"按 [{dim}] 统计指标", dim_df))
+    # === Part 4: 主分组 × 子分组 交叉统计 ===
+    if main_dim and sub_dim and main_dim in filtered_df.columns and sub_dim in filtered_df.columns:
+        for m_val in sorted(filtered_df[main_dim].dropna().unique()):
+            subset = filtered_df[filtered_df[main_dim] == m_val]
+            s_totals = subset.groupby(sub_dim).size().to_dict()
+            if not s_totals:
+                continue
+            stats_tables.append((
+                f"按 [{main_dim}={m_val}] → [{sub_dim}] 统计指标",
+                pd.DataFrame(_build_rows(subset, sub_dim, s_totals)),
+            ))
 
     # --- 页面预览 ---
     for title, sdf in stats_tables:
