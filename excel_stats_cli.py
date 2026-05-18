@@ -108,16 +108,17 @@ def compute_stats(df, stat_col, main_dim, sub_dims, keep_values):
 
     # 主分组 × 子分组 交叉统计
     if main_dim and sub_dims and main_dim in df.columns:
-        for sdim in sub_dims:
-            if sdim not in df.columns:
-                continue
-            for m_val in sorted(df[main_dim].dropna().unique()):
+        for m_val in sorted(df[main_dim].dropna().unique()):
+            stats.append((f"--- {main_dim}: {m_val} ---", pd.DataFrame()))
+            for sdim in sub_dims:
+                if sdim not in df.columns:
+                    continue
                 subset = df[df[main_dim] == m_val]
                 s_totals = subset.groupby(sdim).size().to_dict()
                 if not s_totals:
                     continue
                 stats.append((
-                    f"按 [{main_dim}={m_val}] → [{sdim}] 统计指标",
+                    f"按 [{sdim}] 统计指标",
                     pd.DataFrame(_build_rows(subset, sdim, stat_col, s_totals, keep_values)),
                 ))
 
@@ -136,22 +137,31 @@ def write_stats_to_excel(orig_wb, combined_df, stats_tables, output_path):
     header_font = Font(bold=True, size=11, color="FFFFFF")
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
+    group_header_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    group_header_font = Font(bold=True, size=12, color="375623")
     cell_align = Alignment(horizontal="center", vertical="center")
     pct_fmt = "0.00%"
 
     row = 1
     for title, sdf in stats_tables:
+        if sdf.empty:
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+            tc = ws.cell(row=row, column=1, value=title)
+            tc.font = group_header_font
+            tc.fill = group_header_fill
+            tc.alignment = cell_align
+            row += 1
+            continue
+
         write_cols = [c for c in sdf.columns if c not in ("占比", "_total")]
         col_map = {"占比_raw": "占比"}
         ncols = len(write_cols)
 
-        # 节标题
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
         tc = ws.cell(row=row, column=1, value=title)
         tc.font = section_font
         row += 1
 
-        # 表头
         for ci, col_name in enumerate(write_cols, 1):
             label = col_map.get(col_name, str(col_name))
             c = ws.cell(row=row, column=ci, value=label)
@@ -160,7 +170,6 @@ def write_stats_to_excel(orig_wb, combined_df, stats_tables, output_path):
             c.alignment = cell_align
         row += 1
 
-        # 数据
         for _, rd in sdf.iterrows():
             for ci, col_name in enumerate(write_cols, 1):
                 val = rd[col_name]
@@ -211,7 +220,11 @@ def main():
 
     # 打印
     for title, sdf in stats:
-        print(f"\n{'='*50}")
+        print()
+        if sdf.empty:
+            print(f"  --- {title} ---")
+            continue
+        print(f"{'='*50}")
         print(f"  {title}")
         print(f"{'='*50}")
         display_df = sdf.drop(columns=["占比_raw", "_total"], errors="ignore")

@@ -255,27 +255,31 @@ if st.button("执行统计并生成 Excel", type="primary"):
 
     # === Part 4: 主分组 × 子分组 交叉统计 ===
     if main_dim and sub_dims and main_dim in filtered_df.columns:
-        for sdim in sub_dims:
-            if sdim not in filtered_df.columns:
-                continue
-            for m_val in sorted(filtered_df[main_dim].dropna().unique()):
+        for m_val in sorted(filtered_df[main_dim].dropna().unique()):
+            # 用空 DataFrame 标记节标题
+            stats_tables.append((f"--- {main_dim}: {m_val} ---", pd.DataFrame()))
+            for sdim in sub_dims:
+                if sdim not in filtered_df.columns:
+                    continue
                 subset = filtered_df[filtered_df[main_dim] == m_val]
                 s_totals = subset.groupby(sdim).size().to_dict()
                 if not s_totals:
                     continue
                 stats_tables.append((
-                    f"按 [{main_dim}={m_val}] → [{sdim}] 统计指标",
+                    f"按 [{sdim}] 统计指标",
                     pd.DataFrame(_build_rows(subset, sdim, s_totals)),
                 ))
 
     # --- 页面预览 ---
     for title, sdf in stats_tables:
-        st.markdown(f"**{title}**")
-        # 显示时去掉内部列，占比转字符串格式
-        display_df = sdf.drop(columns=["占比_raw", "_total"], errors="ignore").copy()
-        if "占比" in display_df.columns:
-            display_df["占比"] = display_df["占比"].apply(lambda x: f"{x}%")
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        if sdf.empty:
+            st.markdown(f"### {title}")
+        else:
+            st.markdown(f"**{title}**")
+            display_df = sdf.drop(columns=["占比_raw", "_total"], errors="ignore").copy()
+            if "占比" in display_df.columns:
+                display_df["占比"] = display_df["占比"].apply(lambda x: f"{x}%")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     # --- 输出 Excel ---
     output = io.BytesIO()
@@ -300,14 +304,25 @@ if st.button("执行统计并生成 Excel", type="primary"):
     header_font = Font(bold=True, size=11, color="FFFFFF")
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
+    group_header_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    group_header_font = Font(bold=True, size=12, color="375623")
     cell_align = Alignment(horizontal="center", vertical="center")
     pct_fmt = '0.00%'
 
     current_row = 1
     for title, sdf in stats_tables:
-        # columns to write: skip _total, use 占比_raw for percentage
+        # 主分组节标题（空 DataFrame）
+        if sdf.empty:
+            ws_stats.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
+            tc = ws_stats.cell(row=current_row, column=1, value=title)
+            tc.font = group_header_font
+            tc.fill = group_header_fill
+            tc.alignment = cell_align
+            current_row += 1
+            continue
+
         write_cols = [c for c in sdf.columns if c not in ("占比", "_total")]
-        col_map = {"占比_raw": "占比"}  # rename in Excel
+        col_map = {"占比_raw": "占比"}
 
         ncols = len(write_cols)
         ws_stats.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=ncols)
@@ -315,7 +330,6 @@ if st.button("执行统计并生成 Excel", type="primary"):
         title_cell.font = section_font
         current_row += 1
 
-        # 表头
         for ci, col_name in enumerate(write_cols, 1):
             label = col_map.get(col_name, str(col_name))
             cell = ws_stats.cell(row=current_row, column=ci, value=label)
@@ -324,7 +338,6 @@ if st.button("执行统计并生成 Excel", type="primary"):
             cell.alignment = cell_align
         current_row += 1
 
-        # 数据行
         for _, row_data in sdf.iterrows():
             for ci, col_name in enumerate(write_cols, 1):
                 val = row_data[col_name]
@@ -332,7 +345,6 @@ if st.button("执行统计并生成 Excel", type="primary"):
                     val = ""
                 cel = ws_stats.cell(row=current_row, column=ci, value=val)
                 cel.alignment = cell_align
-                # 百分比列使用 Excel 百分比格式
                 if col_name == "占比_raw":
                     cel.number_format = pct_fmt
             current_row += 1
