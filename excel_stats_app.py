@@ -141,19 +141,18 @@ for f in st.session_state.filters:
 st.caption(f"筛选后: {len(filtered_df)} 条（原始 {len(combined)} 条）")
 
 # --- Step 2: 输出指标列 ---
-st.markdown("### Step 2: 输出指标列")
-st.caption("按此列的值分组输出（如 [一级分类] 的 [单轮] [多轮]）")
+st.markdown("### Step 2: 输出指标列（可多选）")
+st.caption("按这些列的值分组，生成各自的统计表（如按 [数据集] 和一 [一级分类] 分别统计）")
 
-output_dim = st.selectbox(
-    "选择输出指标列",
-    options=["(不分组，仅输出整体)"] + available_cols,
-    key="output_dim",
+output_dims = st.multiselect(
+    "选择输出指标列（可多选，空则仅输出整体）",
+    options=available_cols,
+    key="output_dims",
 )
-output_dim = None if output_dim == "(不分组，仅输出整体)" else output_dim
 
 # --- Step 3: 统计指标列 ---
 st.markdown("### Step 3: 统计指标列")
-st.caption("统计此列各值的数量和占比（如 process_conclusion 的 PASS / FAIL）")
+st.caption("统计此列各值的数量和占比（如 process_conclusion 中各值的分布）")
 
 stat_col = st.selectbox(
     "选择统计指标列",
@@ -174,43 +173,48 @@ if st.button("执行统计并生成 Excel", type="primary"):
         st.stop()
 
     total = len(filtered_df)
-    stats_tables = []
+    stats_tables = []  # (title, DataFrame) pairs
 
     # === Part 1: 整体统计 ===
-    overall = (
-        filtered_df.groupby(stat_col)
-        .size()
-        .reset_index(name="数量")
-    )
-    overall["占比"] = overall["数量"].apply(lambda x: f"{x / total * 100:.1f}%")
-    overall = overall.sort_values("数量", ascending=False)
-    stats_tables.append(("整体统计", overall))
+    overall_rows = []
+    for sv in sorted(filtered_df[stat_col].dropna().unique()):
+        cnt = (filtered_df[stat_col] == sv).sum()
+        overall_rows.append({
+            "分组": "整体",
+            stat_col: str(sv),
+            "占比": f"{cnt / total * 100:.1f}%",
+            "正确/总数": f"{cnt}/{total}",
+        })
+    overall_df = pd.DataFrame(overall_rows)
+    stats_tables.append(("整体统计", overall_df))
 
-    # === Part 2: 按输出指标分组统计 ===
-    if output_dim and output_dim in filtered_df.columns:
+    # === Part 2: 按每个输出指标分组统计 ===
+    for dim in output_dims:
+        if dim not in filtered_df.columns:
+            continue
+
         pivoted = (
-            filtered_df.groupby([output_dim, stat_col])
+            filtered_df.groupby([dim, stat_col])
             .size()
             .reset_index(name="数量")
         )
 
-        dim_values = pivoted[output_dim].unique().tolist()
-        stat_values = pivoted[stat_col].unique().tolist()
+        dim_totals = filtered_df.groupby(dim).size().to_dict()
 
-        wide_rows = []
-        for dim_val in dim_values:
-            row = {output_dim: str(dim_val)}
-            dim_subset = pivoted[pivoted[output_dim] == dim_val]
-            dim_total = dim_subset["数量"].sum()
-            row["小计"] = dim_total
-            for sv in stat_values:
-                cnt = dim_subset[dim_subset[stat_col] == sv]["数量"].sum()
-                row[f"{sv}(数量)"] = cnt
-                row[f"{sv}(占比)"] = f"{cnt / dim_total * 100:.1f}%" if dim_total > 0 else "0.0%"
-            wide_rows.append(row)
+        dim_rows = []
+        for dim_val in sorted(filtered_df[dim].dropna().unique()):
+            grp_total = dim_totals.get(dim_val, 0)
+            for sv in sorted(filtered_df[stat_col].dropna().unique()):
+                cnt = pivoted[(pivoted[dim] == dim_val) & (pivoted[stat_col] == sv)]["数量"].sum()
+                dim_rows.append({
+                    "分组": str(dim_val),
+                    stat_col: str(sv),
+                    "占比": f"{cnt / grp_total * 100:.1f}%" if grp_total > 0 else "0.0%",
+                    "正确/总数": f"{cnt}/{grp_total}",
+                })
 
-        grouping_df = pd.DataFrame(wide_rows)
-        stats_tables.append((f"按 [{output_dim}] 分组统计", grouping_df))
+        dim_df = pd.DataFrame(dim_rows)
+        stats_tables.append((f"按 [{dim}] 统计指标", dim_df))
 
     # --- 页面预览 ---
     for title, sdf in stats_tables:
@@ -237,33 +241,38 @@ if st.button("执行统计并生成 Excel", type="primary"):
         del wb[stats_sname]
     ws_stats = wb.create_sheet(stats_sname)
 
-    header_font = Font(bold=True, size=11)
-    header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    header_font = Font(bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
+    cell_align = Alignment(horizontal="center", vertical="center")
 
     current_row = 1
     for title, sdf in stats_tables:
         ncols = len(sdf.columns)
+        # 节标题
         ws_stats.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=ncols)
         title_cell = ws_stats.cell(row=current_row, column=1, value=title)
         title_cell.font = section_font
         current_row += 1
 
+        # 表头
         for ci, col_name in enumerate(sdf.columns, 1):
             cell = ws_stats.cell(row=current_row, column=ci, value=str(col_name))
             cell.font = header_font
             cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center")
+            cell.alignment = cell_align
         current_row += 1
 
+        # 数据行
         for _, row_data in sdf.iterrows():
             for ci, val in enumerate(row_data, 1):
-                ws_stats.cell(row=current_row, column=ci, value=val if not pd.isna(val) else "")
+                cel = ws_stats.cell(row=current_row, column=ci, value=val if not pd.isna(val) else "")
+                cel.alignment = cell_align
             current_row += 1
 
         current_row += 2
 
-    for ci in range(1, 12):
+    for ci in range(1, 6):
         ws_stats.column_dimensions[get_column_letter(ci)].width = 22
 
     wb.save(output)
