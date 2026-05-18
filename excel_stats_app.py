@@ -179,11 +179,14 @@ if st.button("执行统计并生成 Excel", type="primary"):
     overall_rows = []
     for sv in sorted(filtered_df[stat_col].dropna().unique()):
         cnt = (filtered_df[stat_col] == sv).sum()
+        pct = cnt / total if total else 0
         overall_rows.append({
             "分组": "整体",
             stat_col: str(sv),
-            "占比": f"{cnt / total * 100:.1f}%",
+            "占比": round(pct * 100, 1),   # 数值（页面用）
+            "占比_raw": pct,                # 小数（Excel 百分比格式用）
             "正确/总数": f"{cnt}/{total}",
+            "_total": total,
         })
     overall_df = pd.DataFrame(overall_rows)
     stats_tables.append(("整体统计", overall_df))
@@ -206,11 +209,14 @@ if st.button("执行统计并生成 Excel", type="primary"):
             grp_total = dim_totals.get(dim_val, 0)
             for sv in sorted(filtered_df[stat_col].dropna().unique()):
                 cnt = pivoted[(pivoted[dim] == dim_val) & (pivoted[stat_col] == sv)]["数量"].sum()
+                pct = cnt / grp_total if grp_total else 0
                 dim_rows.append({
                     "分组": str(dim_val),
                     stat_col: str(sv),
-                    "占比": f"{cnt / grp_total * 100:.1f}%" if grp_total > 0 else "0.0%",
+                    "占比": round(pct * 100, 1),
+                    "占比_raw": pct,
                     "正确/总数": f"{cnt}/{grp_total}",
+                    "_total": grp_total,
                 })
 
         dim_df = pd.DataFrame(dim_rows)
@@ -219,7 +225,11 @@ if st.button("执行统计并生成 Excel", type="primary"):
     # --- 页面预览 ---
     for title, sdf in stats_tables:
         st.markdown(f"**{title}**")
-        st.dataframe(sdf, use_container_width=True, hide_index=True)
+        # 显示时去掉内部列，占比转字符串格式
+        display_df = sdf.drop(columns=["占比_raw", "_total"], errors="ignore").copy()
+        if "占比" in display_df.columns:
+            display_df["占比"] = display_df["占比"].apply(lambda x: f"{x}%")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     # --- 输出 Excel ---
     output = io.BytesIO()
@@ -245,19 +255,24 @@ if st.button("执行统计并生成 Excel", type="primary"):
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
     cell_align = Alignment(horizontal="center", vertical="center")
+    pct_fmt = '0.0%'
 
     current_row = 1
     for title, sdf in stats_tables:
-        ncols = len(sdf.columns)
-        # 节标题
+        # columns to write: skip _total, use 占比_raw for percentage
+        write_cols = [c for c in sdf.columns if c not in ("占比", "_total")]
+        col_map = {"占比_raw": "占比"}  # rename in Excel
+
+        ncols = len(write_cols)
         ws_stats.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=ncols)
         title_cell = ws_stats.cell(row=current_row, column=1, value=title)
         title_cell.font = section_font
         current_row += 1
 
         # 表头
-        for ci, col_name in enumerate(sdf.columns, 1):
-            cell = ws_stats.cell(row=current_row, column=ci, value=str(col_name))
+        for ci, col_name in enumerate(write_cols, 1):
+            label = col_map.get(col_name, str(col_name))
+            cell = ws_stats.cell(row=current_row, column=ci, value=label)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = cell_align
@@ -265,9 +280,15 @@ if st.button("执行统计并生成 Excel", type="primary"):
 
         # 数据行
         for _, row_data in sdf.iterrows():
-            for ci, val in enumerate(row_data, 1):
-                cel = ws_stats.cell(row=current_row, column=ci, value=val if not pd.isna(val) else "")
+            for ci, col_name in enumerate(write_cols, 1):
+                val = row_data[col_name]
+                if pd.isna(val):
+                    val = ""
+                cel = ws_stats.cell(row=current_row, column=ci, value=val)
                 cel.alignment = cell_align
+                # 百分比列使用 Excel 百分比格式
+                if col_name == "占比_raw":
+                    cel.number_format = pct_fmt
             current_row += 1
 
         current_row += 2
