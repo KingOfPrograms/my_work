@@ -1,14 +1,15 @@
 """
 Excel 勾选统计工具
 ==================
-在 Web 页面勾选数据行 → 选择统计维度 → 下载含统计结果的新 Excel。
-启动: streamlit run excel_stats_app.py
+三步统计模型：筛选条件 -> 输出指标列（分组维度） -> 统计指标列（计数）。
+输出含整体统计和按输出指标分组统计的 Excel。
+
+用法: streamlit run excel_stats_app.py
 """
 
 import io
 import streamlit as st
 import pandas as pd
-from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -26,9 +27,7 @@ source = uploaded if uploaded else DEFAULT_FILE
 try:
     if isinstance(source, str):
         all_sheets = pd.read_excel(source, sheet_name=None)
-        # 同时用 openpyxl 读取原始文件，方便后续写回
         import openpyxl as _xl
-
         _orig_wb = _xl.load_workbook(source)
     else:
         all_sheets = pd.read_excel(source, sheet_name=None)
@@ -42,39 +41,15 @@ tab_labels = sheet_names if len(sheet_names) > 1 else sheet_names
 tabs = st.tabs(tab_labels)
 
 # ---------------------------------------------------------------------------
-# 2. 每页渲染带勾选的数据表
+# 2. 数据表格（带勾选框）
 # ---------------------------------------------------------------------------
-selected_indices = {}  # sheet_name → list of selected row indices
-filter_state = {}  # sheet_name → {col: selected values}
+selected_indices = {}
 
 for idx, sname in enumerate(sheet_names):
     df = all_sheets[sname].copy()
     with tabs[idx]:
         st.subheader(sname)
 
-        # --- 顶部筛选栏 ---
-        with st.expander("筛选条件", expanded=False):
-            cols_filter = st.columns(min(4, len(df.columns)))
-            for ci, col in enumerate(df.columns):
-                with cols_filter[ci % 4]:
-                    vals = df[col].dropna().unique().tolist()
-                    if len(vals) <= 50:
-                        selected = st.multiselect(
-                            str(col)[:20],
-                            options=vals,
-                            key=f"flt_{sname}_{col}",
-                        )
-                        if selected:
-                            df = df[df[col].isin(selected)]
-                    elif col not in ("filepath",):  # 跳过长文本列
-                        text_input = st.text_input(
-                            str(col)[:20],
-                            key=f"flt_txt_{sname}_{col}",
-                        )
-                        if text_input:
-                            df = df[df[col].astype(str).str.contains(text_input, na=False)]
-
-        # --- 数据表格（带勾选列） ---
         df_display = df.copy()
         df_display.insert(0, "选择", True)
 
@@ -87,7 +62,6 @@ for idx, sname in enumerate(sheet_names):
             key=f"editor_{sname}",
         )
 
-        # 记录勾选的行（在原 df 中的索引）
         selected_mask = edited["选择"].values if "选择" in edited.columns else []
         selected_idx = (
             df.index[selected_mask].tolist()
@@ -95,143 +69,186 @@ for idx, sname in enumerate(sheet_names):
             else df.index.tolist()
         )
         selected_indices[sname] = selected_idx
-
         st.caption(f"已选 {len(selected_idx)} / {len(df)} 条")
 
 # ---------------------------------------------------------------------------
-# 3. 统计配置
+# 3. 统计配置（三步模型）
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("统计配置")
 
-# 获取第一个 sheet 的列名作为统计维度选项
-main_df = all_sheets[sheet_names[0]]
-stat_cols = [c for c in main_df.columns if c != "filepath"]
+# 收集选中数据
+all_data = []
+for sname in sheet_names:
+    df = all_sheets[sname]
+    idx = selected_indices.get(sname, [])
+    selected = df.loc[df.index.isin(idx)].copy()
+    all_data.append(selected)
 
-col1, col2 = st.columns(2)
-with col1:
-    stat_mode = st.selectbox(
-        "统计方式",
-        ["分组计数", "通过率统计 (process_conclusion)", "error_tag 分布"],
-        key="stat_mode",
-    )
-with col2:
-    if "分组计数" in stat_mode:
-        group_cols = st.multiselect(
-            "分组列（可多选，空则默认一级分类）",
-            options=stat_cols,
-            default=["一级分类"] if "一级分类" in stat_cols else [],
-            key="group_cols",
+combined = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+available_cols = list(combined.columns)
+
+st.info(f"当前选中数据: {len(combined)} 条")
+
+# --- Step 1: 筛选条件 ---
+st.markdown("### Step 1: 筛选条件")
+st.caption("根据某列的值筛选参与统计的用例，多个条件之间为 AND 关系")
+
+if "filters" not in st.session_state:
+    st.session_state.filters = []
+
+def add_filter():
+    st.session_state.filters.append({
+        "col": available_cols[0] if available_cols else None,
+        "values": [],
+    })
+
+def remove_filter(i):
+    st.session_state.filters.pop(i)
+
+st.button("+ 添加筛选条件", on_click=add_filter)
+
+filtered_df = combined.copy()
+for i, f in enumerate(st.session_state.filters):
+    fc1, fc2, fc3 = st.columns([3, 4, 1])
+    with fc1:
+        col_list = [f.get("col")] if f.get("col") else []
+        for c in available_cols:
+            if c not in col_list:
+                col_list.append(c)
+        f["col"] = st.selectbox(
+            "筛选列",
+            available_cols,
+            key=f"flt_col_{i}",
+            index=available_cols.index(f["col"]) if f.get("col") in available_cols else 0,
         )
-    else:
-        group_cols = []
+    with fc2:
+        if f.get("col") and f["col"] in filtered_df.columns:
+            col_vals = sorted(filtered_df[f["col"]].dropna().unique().tolist())
+        else:
+            col_vals = []
+        f["values"] = st.multiselect("等于（可多选）", col_vals, key=f"flt_vals_{i}")
+    with fc3:
+        st.button("X 删除", key=f"flt_del_{i}", on_click=remove_filter, args=(i,))
 
-do_extra_pass_rate = st.checkbox("同时输出通过率统计", value=True, key="extra_pass")
-do_extra_error_tag = st.checkbox("同时输出 error_tag 分布", value=True, key="extra_err")
+# 应用筛选
+for f in st.session_state.filters:
+    vals = f.get("values", [])
+    col = f.get("col")
+    if vals and col and col in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df[col].isin(vals)]
+
+st.caption(f"筛选后: {len(filtered_df)} 条（原始 {len(combined)} 条）")
+
+# --- Step 2: 输出指标列 ---
+st.markdown("### Step 2: 输出指标列")
+st.caption("按此列的值分组输出（如 [一级分类] 的 [单轮] [多轮]）")
+
+output_dim = st.selectbox(
+    "选择输出指标列",
+    options=["(不分组，仅输出整体)"] + available_cols,
+    key="output_dim",
+)
+output_dim = None if output_dim == "(不分组，仅输出整体)" else output_dim
+
+# --- Step 3: 统计指标列 ---
+st.markdown("### Step 3: 统计指标列")
+st.caption("统计此列各值的数量和占比（如 process_conclusion 的 PASS / FAIL）")
+
+stat_col = st.selectbox(
+    "选择统计指标列",
+    options=available_cols,
+    key="stat_col",
+)
 
 # ---------------------------------------------------------------------------
 # 4. 执行统计 & 输出 Excel
 # ---------------------------------------------------------------------------
 if st.button("执行统计并生成 Excel", type="primary"):
-    # 收集所有选中行的数据
-    all_selected = []
-    for sname in sheet_names:
-        df = all_sheets[sname]
-        idx = selected_indices.get(sname, [])
-        selected = df.loc[df.index.isin(idx)].copy()
-        selected["_来源Sheet"] = sname
-        all_selected.append(selected)
-
-    if not all_selected:
-        st.warning("未选择任何数据")
+    if filtered_df.empty:
+        st.warning("筛选后无数据")
         st.stop()
 
-    combined = pd.concat(all_selected, ignore_index=True)
-    st.info(f"参与统计的选中数据共 {len(combined)} 条")
-
-    # --- 生成统计结果 ---
-    stats_tables = {}  # title → DataFrame
-
-    # 分组计数
-    if "分组计数" in stat_mode:
-        gcols = group_cols if group_cols else ["一级分类"]
-        gcols_exist = [c for c in gcols if c in combined.columns]
-        if gcols_exist:
-            count_df = (
-                combined.groupby(gcols_exist)
-                .size()
-                .reset_index(name="数量")
-                .sort_values("数量", ascending=False)
-            )
-            count_df["占比"] = (count_df["数量"] / count_df["数量"].sum() * 100).round(1).astype(str) + "%"
-            stats_tables["分组计数"] = count_df
-
-    # 通过率
-    if do_extra_pass_rate or "通过率" in stat_mode:
-        if "process_conclusion" in combined.columns:
-            pass_df = (
-                combined.groupby("process_conclusion")
-                .size()
-                .reset_index(name="数量")
-                .sort_values("数量", ascending=False)
-            )
-            pass_df["占比"] = (pass_df["数量"] / pass_df["数量"].sum() * 100).round(1).astype(str) + "%"
-            stats_tables["通过率统计"] = pass_df
-
-    # error_tag
-    if do_extra_error_tag or "error_tag" in stat_mode:
-        if "process_error_tag" in combined.columns:
-            tags = combined["process_error_tag"].dropna().astype(str)
-            tags = tags[tags.str.strip() != ""]
-            if len(tags) > 0:
-                tag_df = tags.value_counts().reset_index()
-                tag_df.columns = ["process_error_tag", "数量"]
-                tag_df["占比"] = (tag_df["数量"] / tag_df["数量"].sum() * 100).round(1).astype(str) + "%"
-                stats_tables["error_tag分布"] = tag_df
-
-    if not stats_tables:
-        st.warning("没有可生成的统计数据")
+    if not stat_col or stat_col not in filtered_df.columns:
+        st.warning("请选择统计指标列")
         st.stop()
 
-    # 展示预览
-    for title, sdf in stats_tables.items():
+    total = len(filtered_df)
+    stats_tables = []
+
+    # === Part 1: 整体统计 ===
+    overall = (
+        filtered_df.groupby(stat_col)
+        .size()
+        .reset_index(name="数量")
+    )
+    overall["占比"] = overall["数量"].apply(lambda x: f"{x / total * 100:.1f}%")
+    overall = overall.sort_values("数量", ascending=False)
+    stats_tables.append(("整体统计", overall))
+
+    # === Part 2: 按输出指标分组统计 ===
+    if output_dim and output_dim in filtered_df.columns:
+        pivoted = (
+            filtered_df.groupby([output_dim, stat_col])
+            .size()
+            .reset_index(name="数量")
+        )
+
+        dim_values = pivoted[output_dim].unique().tolist()
+        stat_values = pivoted[stat_col].unique().tolist()
+
+        wide_rows = []
+        for dim_val in dim_values:
+            row = {output_dim: str(dim_val)}
+            dim_subset = pivoted[pivoted[output_dim] == dim_val]
+            dim_total = dim_subset["数量"].sum()
+            row["小计"] = dim_total
+            for sv in stat_values:
+                cnt = dim_subset[dim_subset[stat_col] == sv]["数量"].sum()
+                row[f"{sv}(数量)"] = cnt
+                row[f"{sv}(占比)"] = f"{cnt / dim_total * 100:.1f}%" if dim_total > 0 else "0.0%"
+            wide_rows.append(row)
+
+        grouping_df = pd.DataFrame(wide_rows)
+        stats_tables.append((f"按 [{output_dim}] 分组统计", grouping_df))
+
+    # --- 页面预览 ---
+    for title, sdf in stats_tables:
         st.markdown(f"**{title}**")
         st.dataframe(sdf, use_container_width=True, hide_index=True)
 
-    # --- 生成输出 Excel ---
+    # --- 输出 Excel ---
     output = io.BytesIO()
 
     if _orig_wb is not None:
         wb = _orig_wb
     else:
-        wb = Workbook()
+        wb = _xl.Workbook()
         if "Sheet" in wb.sheetnames and len(wb.sheetnames) == 1:
             ws_default = wb["Sheet"]
-            for ci, col_name in enumerate(main_df.columns, 1):
+            for ci, col_name in enumerate(combined.columns, 1):
                 ws_default.cell(row=1, column=ci, value=col_name)
-            for ri, row in main_df.itertuples(index=False):
+            for ri, row in combined.itertuples(index=False):
                 for ci, val in enumerate(row, 1):
                     ws_default.cell(row=ri + 2, column=ci, value=val)
 
-    # 新增/覆盖统计 sheet
     stats_sname = "统计分析"
     if stats_sname in wb.sheetnames:
         del wb[stats_sname]
     ws_stats = wb.create_sheet(stats_sname)
 
-    header_font = Font(bold=True, size=12)
+    header_font = Font(bold=True, size=11)
     header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
 
     current_row = 1
-    for title, sdf in stats_tables.items():
-        # 节标题
-        ws_stats.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(sdf.columns))
+    for title, sdf in stats_tables:
+        ncols = len(sdf.columns)
+        ws_stats.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=ncols)
         title_cell = ws_stats.cell(row=current_row, column=1, value=title)
         title_cell.font = section_font
         current_row += 1
 
-        # 表头
         for ci, col_name in enumerate(sdf.columns, 1):
             cell = ws_stats.cell(row=current_row, column=ci, value=str(col_name))
             cell.font = header_font
@@ -239,16 +256,14 @@ if st.button("执行统计并生成 Excel", type="primary"):
             cell.alignment = Alignment(horizontal="center")
         current_row += 1
 
-        # 数据
         for _, row_data in sdf.iterrows():
             for ci, val in enumerate(row_data, 1):
-                ws_stats.cell(row=current_row, column=ci, value=val)
+                ws_stats.cell(row=current_row, column=ci, value=val if not pd.isna(val) else "")
             current_row += 1
 
-        current_row += 2  # 空行分隔
+        current_row += 2
 
-    # 调整列宽
-    for ci in range(1, 10):
+    for ci in range(1, 12):
         ws_stats.column_dimensions[get_column_letter(ci)].width = 22
 
     wb.save(output)
