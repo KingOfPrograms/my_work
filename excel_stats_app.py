@@ -10,6 +10,7 @@ Excel 勾选统计工具
 import io
 import streamlit as st
 import pandas as pd
+import openpyxl as _xl
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -27,7 +28,6 @@ source = uploaded if uploaded else DEFAULT_FILE
 try:
     if isinstance(source, str):
         all_sheets = pd.read_excel(source, sheet_name=None)
-        import openpyxl as _xl
         _orig_wb = _xl.load_workbook(source)
     else:
         all_sheets = pd.read_excel(source, sheet_name=None)
