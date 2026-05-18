@@ -154,14 +154,14 @@ with col_a:
     main_dim = None if main_dim == "(不分组)" else main_dim
 
 with col_b:
-    sub_dim_options = ["(无子分组)"] + [c for c in available_cols if c != main_dim]
-    sub_dim = st.selectbox(
-        "子分组维度（可选）",
+    sub_dim_options = [c for c in available_cols if c != main_dim]
+    sub_dims = st.multiselect(
+        "子分组维度（可多选）",
         options=sub_dim_options,
-        key="sub_dim",
+        key="sub_dims",
         disabled=main_dim is None,
     )
-    sub_dim = None if sub_dim == "(无子分组)" else sub_dim
+    sub_dims = sub_dims if sub_dims else []
 
 # --- Step 3: 统计指标列 ---
 st.markdown("### Step 3: 统计指标列")
@@ -199,7 +199,7 @@ if st.button("执行统计并生成 Excel", type="primary"):
                 rows.append({
                     "分组": str(gval),
                     stat_col: str(sv),
-                    "占比": round(pct * 100, 1),
+                    "占比": round(pct * 100, 2),
                     "占比_raw": pct,
                     "正确/总数": f"{cnt}/{grp_total}",
                     "_total": grp_total,
@@ -214,7 +214,7 @@ if st.button("执行统计并生成 Excel", type="primary"):
         overall_rows.append({
             "分组": "整体",
             stat_col: str(sv),
-            "占比": round(pct * 100, 1),
+            "占比": round(pct * 100, 2),
             "占比_raw": pct,
             "正确/总数": f"{cnt}/{total}",
             "_total": total,
@@ -230,24 +230,29 @@ if st.button("执行统计并生成 Excel", type="primary"):
         ))
 
     # === Part 3: 按子分组维度 ===
-    if sub_dim and sub_dim in filtered_df.columns:
-        s_totals = filtered_df.groupby(sub_dim).size().to_dict()
+    for sdim in sub_dims:
+        if sdim not in filtered_df.columns:
+            continue
+        s_totals = filtered_df.groupby(sdim).size().to_dict()
         stats_tables.append((
-            f"按 [{sub_dim}] 统计指标",
-            pd.DataFrame(_build_rows(filtered_df, sub_dim, s_totals)),
+            f"按 [{sdim}] 统计指标",
+            pd.DataFrame(_build_rows(filtered_df, sdim, s_totals)),
         ))
 
     # === Part 4: 主分组 × 子分组 交叉统计 ===
-    if main_dim and sub_dim and main_dim in filtered_df.columns and sub_dim in filtered_df.columns:
-        for m_val in sorted(filtered_df[main_dim].dropna().unique()):
-            subset = filtered_df[filtered_df[main_dim] == m_val]
-            s_totals = subset.groupby(sub_dim).size().to_dict()
-            if not s_totals:
+    if main_dim and sub_dims and main_dim in filtered_df.columns:
+        for sdim in sub_dims:
+            if sdim not in filtered_df.columns:
                 continue
-            stats_tables.append((
-                f"按 [{main_dim}={m_val}] → [{sub_dim}] 统计指标",
-                pd.DataFrame(_build_rows(subset, sub_dim, s_totals)),
-            ))
+            for m_val in sorted(filtered_df[main_dim].dropna().unique()):
+                subset = filtered_df[filtered_df[main_dim] == m_val]
+                s_totals = subset.groupby(sdim).size().to_dict()
+                if not s_totals:
+                    continue
+                stats_tables.append((
+                    f"按 [{main_dim}={m_val}] → [{sdim}] 统计指标",
+                    pd.DataFrame(_build_rows(subset, sdim, s_totals)),
+                ))
 
     # --- 页面预览 ---
     for title, sdf in stats_tables:
@@ -282,7 +287,7 @@ if st.button("执行统计并生成 Excel", type="primary"):
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
     cell_align = Alignment(horizontal="center", vertical="center")
-    pct_fmt = '0.0%'
+    pct_fmt = '0.00%'
 
     current_row = 1
     for title, sdf in stats_tables:

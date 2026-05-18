@@ -31,8 +31,8 @@ FILTERS = {
 # 主分组维度: None 表示不分组
 MAIN_DIM = "数据集"
 
-# 子分组维度: None 表示无子分组
-SUB_DIM = "一级分类"
+# 子分组维度: 可多选，留空列表表示无子分组
+SUB_DIMS = ["一级分类"]
 
 # 统计指标列
 STAT_COL = "process_conclusion"
@@ -53,7 +53,7 @@ def _build_rows(df, group_col, stat_col, group_total_map):
             rows.append({
                 "分组": str(gval),
                 stat_col: str(sv),
-                "占比": round(pct * 100, 1),
+                "占比": round(pct * 100, 2),
                 "占比_raw": pct,
                 "正确/总数": f"{cnt}/{grp_total}",
                 "_total": grp_total,
@@ -61,7 +61,7 @@ def _build_rows(df, group_col, stat_col, group_total_map):
     return rows
 
 
-def compute_stats(df, stat_col, main_dim, sub_dim):
+def compute_stats(df, stat_col, main_dim, sub_dims):
     """返回 [(title, DataFrame), ...] 列表"""
     total = len(df)
     stats = []
@@ -74,7 +74,7 @@ def compute_stats(df, stat_col, main_dim, sub_dim):
         overall_rows.append({
             "分组": "整体",
             stat_col: str(sv),
-            "占比": round(pct * 100, 1),
+            "占比": round(pct * 100, 2),
             "占比_raw": pct,
             "正确/总数": f"{cnt}/{total}",
             "_total": total,
@@ -90,24 +90,29 @@ def compute_stats(df, stat_col, main_dim, sub_dim):
         ))
 
     # 按子分组
-    if sub_dim and sub_dim in df.columns:
-        s_totals = df.groupby(sub_dim).size().to_dict()
+    for sdim in sub_dims:
+        if sdim not in df.columns:
+            continue
+        s_totals = df.groupby(sdim).size().to_dict()
         stats.append((
-            f"按 [{sub_dim}] 统计指标",
-            pd.DataFrame(_build_rows(df, sub_dim, stat_col, s_totals)),
+            f"按 [{sdim}] 统计指标",
+            pd.DataFrame(_build_rows(df, sdim, stat_col, s_totals)),
         ))
 
     # 主分组 × 子分组 交叉统计
-    if main_dim and sub_dim and main_dim in df.columns and sub_dim in df.columns:
-        for m_val in sorted(df[main_dim].dropna().unique()):
-            subset = df[df[main_dim] == m_val]
-            s_totals = subset.groupby(sub_dim).size().to_dict()
-            if not s_totals:
+    if main_dim and sub_dims and main_dim in df.columns:
+        for sdim in sub_dims:
+            if sdim not in df.columns:
                 continue
-            stats.append((
-                f"按 [{main_dim}={m_val}] → [{sub_dim}] 统计指标",
-                pd.DataFrame(_build_rows(subset, sub_dim, stat_col, s_totals)),
-            ))
+            for m_val in sorted(df[main_dim].dropna().unique()):
+                subset = df[df[main_dim] == m_val]
+                s_totals = subset.groupby(sdim).size().to_dict()
+                if not s_totals:
+                    continue
+                stats.append((
+                    f"按 [{main_dim}={m_val}] → [{sdim}] 统计指标",
+                    pd.DataFrame(_build_rows(subset, sdim, stat_col, s_totals)),
+                ))
 
     return stats
 
@@ -125,7 +130,7 @@ def write_stats_to_excel(orig_wb, combined_df, stats_tables, output_path):
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     section_font = Font(bold=True, size=13, color="1F4E79")
     cell_align = Alignment(horizontal="center", vertical="center")
-    pct_fmt = "0.0%"
+    pct_fmt = "0.00%"
 
     row = 1
     for title, sdf in stats_tables:
@@ -195,7 +200,7 @@ def main():
         return
 
     # 统计
-    stats = compute_stats(df, STAT_COL, MAIN_DIM, SUB_DIM)
+    stats = compute_stats(df, STAT_COL, MAIN_DIM, SUB_DIMS)
 
     # 打印
     for title, sdf in stats:
