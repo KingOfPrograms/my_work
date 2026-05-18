@@ -37,17 +37,20 @@ SUB_DIMS = ["一级分类"]
 # 统计指标列
 STAT_COL = "process_conclusion"
 
+# 保留的指标值: 空列表表示保留全部，如 ["PASS"] 只显示 PASS 行
+KEEP_STAT_VALUES = ["PASS"]
+
 # ============================================================
 # 统计逻辑
 # ============================================================
 
 
-def _build_rows(df, group_col, stat_col, group_total_map):
+def _build_rows(df, group_col, stat_col, group_total_map, keep_values):
     """构建分组统计行"""
     rows = []
     for gval in sorted(df[group_col].dropna().unique()):
         grp_total = group_total_map.get(gval, 0)
-        for sv in sorted(df[stat_col].dropna().unique()):
+        for sv in keep_values:
             cnt = ((df[group_col] == gval) & (df[stat_col] == sv)).sum()
             pct = cnt / grp_total if grp_total else 0
             rows.append({
@@ -61,14 +64,18 @@ def _build_rows(df, group_col, stat_col, group_total_map):
     return rows
 
 
-def compute_stats(df, stat_col, main_dim, sub_dims):
+def compute_stats(df, stat_col, main_dim, sub_dims, keep_values):
     """返回 [(title, DataFrame), ...] 列表"""
     total = len(df)
     stats = []
 
+    # 保留的指标值：如果为空则取全部
+    if not keep_values:
+        keep_values = sorted(df[stat_col].dropna().unique().tolist())
+
     # 整体统计
     overall_rows = []
-    for sv in sorted(df[stat_col].dropna().unique()):
+    for sv in keep_values:
         cnt = (df[stat_col] == sv).sum()
         pct = cnt / total if total else 0
         overall_rows.append({
@@ -86,7 +93,7 @@ def compute_stats(df, stat_col, main_dim, sub_dims):
         m_totals = df.groupby(main_dim).size().to_dict()
         stats.append((
             f"按 [{main_dim}] 统计指标",
-            pd.DataFrame(_build_rows(df, main_dim, stat_col, m_totals)),
+            pd.DataFrame(_build_rows(df, main_dim, stat_col, m_totals, keep_values)),
         ))
 
     # 按子分组
@@ -96,7 +103,7 @@ def compute_stats(df, stat_col, main_dim, sub_dims):
         s_totals = df.groupby(sdim).size().to_dict()
         stats.append((
             f"按 [{sdim}] 统计指标",
-            pd.DataFrame(_build_rows(df, sdim, stat_col, s_totals)),
+            pd.DataFrame(_build_rows(df, sdim, stat_col, s_totals, keep_values)),
         ))
 
     # 主分组 × 子分组 交叉统计
@@ -111,7 +118,7 @@ def compute_stats(df, stat_col, main_dim, sub_dims):
                     continue
                 stats.append((
                     f"按 [{main_dim}={m_val}] → [{sdim}] 统计指标",
-                    pd.DataFrame(_build_rows(subset, sdim, stat_col, s_totals)),
+                    pd.DataFrame(_build_rows(subset, sdim, stat_col, s_totals, keep_values)),
                 ))
 
     return stats
@@ -200,7 +207,7 @@ def main():
         return
 
     # 统计
-    stats = compute_stats(df, STAT_COL, MAIN_DIM, SUB_DIMS)
+    stats = compute_stats(df, STAT_COL, MAIN_DIM, SUB_DIMS, KEEP_STAT_VALUES)
 
     # 打印
     for title, sdf in stats:

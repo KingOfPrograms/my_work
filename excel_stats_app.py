@@ -173,6 +173,20 @@ stat_col = st.selectbox(
     key="stat_col",
 )
 
+# 可选：只保留统计指标列中的某些值
+if stat_col and stat_col in filtered_df.columns:
+    stat_values = sorted(filtered_df[stat_col].dropna().unique().tolist())
+else:
+    stat_values = []
+keep_stat_values = st.multiselect(
+    "保留的指标值（空则保留全部）",
+    options=stat_values,
+    key="keep_stat_values",
+)
+# 空 = 保留全部
+if not keep_stat_values:
+    keep_stat_values = stat_values
+
 # ---------------------------------------------------------------------------
 # 4. 执行统计 & 输出 Excel
 # ---------------------------------------------------------------------------
@@ -193,7 +207,7 @@ if st.button("执行统计并生成 Excel", type="primary"):
         rows = []
         for gval in sorted(df[group_col].dropna().unique()):
             grp_total = group_total_map.get(gval, 0)
-            for sv in sorted(df[stat_col].dropna().unique()):
+            for sv in keep_stat_values:
                 cnt = ((df[group_col] == gval) & (df[stat_col] == sv)).sum()
                 pct = cnt / grp_total if grp_total else 0
                 rows.append({
@@ -208,7 +222,7 @@ if st.button("执行统计并生成 Excel", type="primary"):
 
     # === Part 1: 整体统计 ===
     overall_rows = []
-    for sv in sorted(filtered_df[stat_col].dropna().unique()):
+    for sv in keep_stat_values:
         cnt = (filtered_df[stat_col] == sv).sum()
         pct = cnt / total if total else 0
         overall_rows.append({
