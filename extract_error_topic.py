@@ -69,7 +69,8 @@ def parse_all_errors(reason_str):
     for obj in data:
         if not isinstance(obj, dict):
             continue
-        if obj.get("valid") is False:
+        valid_val = obj.get("valid")
+        if valid_val is False or str(valid_val).lower() == "false":
             errors = obj.get("error", [])
             if isinstance(errors, list):
                 all_errors.extend(errors)
