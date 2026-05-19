@@ -188,7 +188,7 @@ def merge_stats(stats_a, stats_b, label_a, label_b, stat_col):
         pct_a = combined[f"{label_a} 占比"].apply(_parse_pct)
         pct_b = combined[f"{label_b} 占比"].apply(_parse_pct)
         combined["百分比增长"] = [
-            round(b - a, 2) if (a is not None) and (b is not None) else "-"
+            round(a - b, 2) if (a is not None) and (b is not None) else "-"
             for a, b in zip(pct_a, pct_b)
         ]
         # 填充 NaN（两边都没数据的情况）
