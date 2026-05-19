@@ -292,9 +292,9 @@ if st.button("执行统计并生成 Excel", type="primary"):
             ws_default = wb["Sheet"]
             for ci, col_name in enumerate(combined.columns, 1):
                 ws_default.cell(row=1, column=ci, value=col_name)
-            for ri, row in combined.itertuples(index=False):
+            for r_idx, row in enumerate(combined.itertuples(index=False), 2):
                 for ci, val in enumerate(row, 1):
-                    ws_default.cell(row=ri + 2, column=ci, value=val)
+                    ws_default.cell(row=r_idx, column=ci, value=val)
 
     stats_sname = "统计分析"
     if stats_sname in wb.sheetnames:
