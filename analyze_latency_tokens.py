@@ -149,10 +149,10 @@ def get_percentiles(series):
     """返回 [均值, P50, P75, P90, P95]，整数"""
     return [
         int(round(series.mean())),
-        int(series.quantile(0.50)),
-        int(series.quantile(0.75)),
-        int(series.quantile(0.90)),
-        int(series.quantile(0.95)),
+        int(series.quantile(0.50, method='nearest')),
+        int(series.quantile(0.75, method='nearest')),
+        int(series.quantile(0.90, method='nearest')),
+        int(series.quantile(0.95, method='nearest')),
     ]
 
 
