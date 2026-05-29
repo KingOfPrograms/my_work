@@ -15,10 +15,18 @@
     LOCUST_MODE=all              # non_stream | stream | all
 """
 
-import json
 import os
+import sys
+
+# Windows + Python 3.11: 必须在所有其他导入之前 monkey-patch，否则 SSL 递归溢出
+try:
+    from gevent import monkey
+    monkey.patch_all()
+except ImportError:
+    pass
+
+import json
 import time
-from pathlib import Path
 
 import requests
 from locust import User, HttpUser, task, between, events
